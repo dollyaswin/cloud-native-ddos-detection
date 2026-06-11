@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-envoy-ml
+  labels:
+    app: secure-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: secure-api
+  template:
+    metadata:
+      labels:
+        app: secure-api
+    spec:
+      containers:
+      # 1. ENVOY (Ingress to Pod)
+      - name: envoy
+        image: envoyproxy/envoy:v1.28-latest
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: envoy-config-volume
+          mountPath: /etc/envoy/envoy.yaml
+          subPath: envoy.yaml
+
+      # 2. ML Ext-Proc (The Filter)
+      - name: ml-ext-proc
+        image: gcr.io/YOUR_PROJECT_ID/ml-ext-proc:latest
+        ports:
+        - containerPort: 50051
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+
+      # 3. FastAPI (The App)
+      - name: fastapi
+        image: gcr.io/YOUR_PROJECT_ID/fastapi-app:latest
+        ports:
+        - containerPort: 8000
+
+      volumes:
+      - name: envoy-config-volume
+        configMap:
+          name: envoy-config

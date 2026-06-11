@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+.idea/
+.vscode/
+
+# Ignore local compiled protobufs if you want to compile them inside docker
+# *_pb2.py
+# *_pb2_grpc.py

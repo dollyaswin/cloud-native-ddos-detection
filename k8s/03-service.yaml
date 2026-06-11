@@ -1,0 +1,15 @@
+# k8s/03-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-ml-service
+  labels:
+    app: secure-api
+spec:
+  selector:
+    app: secure-api # Harus sama dengan label di 02-deployment.yaml
+  ports:
+    - protocol: TCP
+      port: 80         # Port publik (Load Balancer)
+      targetPort: 8080 # Port yang didengarkan oleh Envoy di dalam Pod
+  type: LoadBalancer   # Akan memicu GCP untuk membuat External IP public

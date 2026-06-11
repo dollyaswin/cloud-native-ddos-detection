@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # 1. Aplikasi Utama (Bertindak sebagai pemegang Network Namespace)
+  fastapi:
+    build:
+      context: ./apps/fastapi
+      dockerfile: Dockerfile
+    # PENTING: Kita HANYA mengekspos port 8080 (milik Envoy) ke host lokal Anda.
+    # Port 8000 (FastAPI) dan 50051 (ML) tetap tersembunyi di dalam "Pod" simulasi ini.
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # 2. ML Ext-Proc Service
+  ml-ext-proc:
+    build:
+      context: ./apps/ml-ext-proc
+      dockerfile: Dockerfile
+    # Mengikat jaringan container ini ke container 'fastapi' (simulasi localhost Pod)
+    network_mode: "service:fastapi"
+    depends_on:
+      - fastapi
+    restart: unless-stopped
+
+  # 3. Envoy Proxy
+  envoy:
+    image: envoyproxy/envoy:v1.28-latest
+    volumes:
+      # Mount file konfigurasi Envoy mentah untuk testing lokal
+      - ./k8s/envoy-local.yaml:/etc/envoy/envoy.yaml:ro
+    # Mengikat jaringan container ini ke container 'fastapi'
+    network_mode: "service:fastapi"
+    depends_on:
+      - fastapi
+      - ml-ext-proc
+    restart: unless-stopped
