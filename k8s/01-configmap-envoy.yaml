@@ -26,6 +26,10 @@ data:
                   routes:
                   - match: { prefix: "/" }
                     route: { cluster: fastapi_service }
+              access_log:
+              - name: envoy.access_loggers.stdout
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
               http_filters:
               # ----------------------------------------------------
               # Konfigurasi Ext-Proc untuk Machine Learning Filter
@@ -43,6 +47,8 @@ data:
                     request_body_mode: BUFFERED # Penting jika model ML butuh membaca payload body
                     response_body_mode: NONE
               - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
       
       clusters:
       # ----------------------------------------------------

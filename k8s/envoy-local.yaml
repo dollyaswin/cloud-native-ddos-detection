@@ -18,6 +18,10 @@ static_resources:
               routes:
               - match: { prefix: "/" }
                 route: { cluster: fastapi_service }
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
           http_filters:
           - name: envoy.filters.http.ext_proc
             typed_config:
@@ -31,6 +35,8 @@ static_resources:
                 request_body_mode: BUFFERED
                 response_body_mode: NONE
           - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   
   clusters:
   - name: fastapi_service
@@ -56,4 +62,5 @@ static_resources:
       - lb_endpoints:
         - endpoint:
             # Sama seperti di atas, gunakan localhost
-            socket_address: { address: 127.0.0.1, port_value: 50051 }
+            address:
+              socket_address: { address: 127.0.0.1, port_value: 50051 }
