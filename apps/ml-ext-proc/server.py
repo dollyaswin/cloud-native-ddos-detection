@@ -8,13 +8,20 @@ import numpy as np
 # menjadi file Python sebelum menjalankan ini.
 # Perintah kompilasi: python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. ext_proc.proto
 try:
-    import ext_proc_pb2
-    import ext_proc_pb2_grpc
+    from envoy.service.ext_proc.v3 import external_processor_pb2 as ext_proc_pb2
+    from envoy.service.ext_proc.v3 import external_processor_pb2_grpc as ext_proc_pb2_grpc
+    from envoy.config.core.v3 import base_pb2
 except ImportError:
-    logging.warning("Protobuf files belum dikompilasi. Mohon jalankan protoc terlebih dahulu.")
+    logging.warning("Package 'xds-protos' belum terinstal. Mohon jalankan pip install xds-protos.")
+
+import sys
 
 # Konfigurasi Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
 logger = logging.getLogger("ExtProc-ONNX")
 
 class ExternalProcessorServicer(ext_proc_pb2_grpc.ExternalProcessorServicer):
@@ -49,7 +56,7 @@ class ExternalProcessorServicer(ext_proc_pb2_grpc.ExternalProcessorServicer):
                 
                 # Jika ML memutuskan trafik AMAN (CONTINUE)
                 response.request_headers.response.header_mutation.set_headers.add(
-                    header=ext_proc_pb2.HeaderValue(key="x-ml-verdict", value="clean")
+                    header=base_pb2.HeaderValue(key="x-ml-verdict", value="clean")
                 )
                 
                 # Jika ML mendeteksi anomali, Anda bisa me-reject request di sini

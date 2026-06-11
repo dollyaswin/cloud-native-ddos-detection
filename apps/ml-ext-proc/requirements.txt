@@ -3,3 +3,4 @@ grpcio-tools>=1.59.0
 protobuf>=4.24.0
 onnxruntime>=1.16.0
 numpy>=1.24.0
+xds-protos
