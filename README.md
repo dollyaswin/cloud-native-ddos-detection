@@ -114,3 +114,52 @@ curl -v http://localhost:8080/health
 * Connection #0 to host localhost left intact
 {"status":"healthy"}
 ```
+
+## 4. Experiment & Metric Extraction (For Scientific Papers)
+
+For research and benchmarking purposes, this application is configured to output high-precision inference latency metrics in structured JSON format via application logs. Meanwhile, container-level resource metrics (CPU/Memory) must be collected externally.
+
+### 4.1. Collecting CPU and Memory Metrics
+To ensure the Python application does not suffer from measurement overhead, track the resource usage of the container externally using `docker stats`.
+
+Run the following bash script in a new terminal *while your load test is running*:
+
+```bash
+# Record CPU and RAM usage of the ml-ext-proc container every 1 second into a CSV file
+echo "timestamp,container,cpu_percent,mem_usage" > docker_metrics.csv
+while true; do
+  timestamp=$(date +%s)
+  stats=$(docker stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}}" | grep ml-ext-proc)
+  echo "$timestamp,$stats" >> docker_metrics.csv
+  sleep 1
+done
+```
+
+### 4.2. Extracting Inference Latency
+The `ml-ext-proc` application prints a JSON log for every request it processes. Once your experiment finishes, you can extract these logs into a `.txt` file and convert them into a CSV for data analysis (e.g., using Python/Pandas, R, or Excel).
+
+1. **Export the logs to a file:**
+```bash
+docker-compose logs ml-ext-proc > experiment_logs.txt
+```
+
+2. **Convert the logs to CSV:**
+You can use the following Python script to parse the `experiment_logs.txt` file and generate a `latency_results.csv`:
+
+```python
+import json
+import csv
+
+with open('experiment_logs.txt', 'r') as log_file, open('latency_results.csv', 'w', newline='') as csv_file:
+    writer = csv.writer(csv_file)
+    writer.writerow(['timestamp', 'metric_type', 'latency_seconds']) # CSV Header
+    
+    for line in log_file:
+        if 'EXPERIMENT_DATA |' in line:
+            json_str = line.split('EXPERIMENT_DATA | ')[1].strip()
+            data = json.loads(json_str)
+            writer.writerow([data['timestamp'], data['metric_type'], data['value']])
+
+print("Data successfully extracted to latency_results.csv!")
+```
+This structured logging approach is highly recommended for scientific paper publications, ensuring reproducible and easily parsable benchmark datasets.

@@ -3,7 +3,8 @@ from concurrent import futures
 import grpc
 import onnxruntime as ort
 import numpy as np
-
+import time
+import json
 # PENTING: Anda harus mengkompilasi file ext_proc.proto dari repositori Envoy
 # menjadi file Python sebelum menjalankan ini.
 # Perintah kompilasi: python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. ext_proc.proto
@@ -47,12 +48,28 @@ class ExternalProcessorServicer(ext_proc_pb2_grpc.ExternalProcessorServicer):
                 logger.info("Menerima Request Headers dari Envoy.")
                 
                 # --- LOGIKA INFERENSI ML (CONTOH) ---
+                # Mulai mencatat waktu (Start recording time)
+                start_time = time.time()
+                
                 # 1. Ekstrak data dari headers/body
                 # 2. Lakukan preprocessing ke format numpy array
                 # dummy_input = np.random.randn(1, 10).astype(np.float32) 
                 # 3. Jalankan inferensi ONNX
                 # ort_inputs = {self.ort_session.get_inputs()[0].name: dummy_input}
                 # ort_outs = self.ort_session.run(None, ort_inputs)
+                
+                # Hitung durasi (Calculate duration)
+                latency = time.time() - start_time
+                
+                # Log latensi dengan format JSON standar untuk ekstraksi data riset/paper
+                # (Log latency using standard JSON format for easy extraction in research papers)
+                experiment_data = {
+                    "metric_type": "inference_latency",
+                    "unit": "seconds",
+                    "value": round(latency, 6),
+                    "timestamp": time.time()
+                }
+                logger.info(f"EXPERIMENT_DATA | {json.dumps(experiment_data)}")
                 
                 # Jika ML memutuskan trafik AMAN (CONTINUE)
                 response.request_headers.response.header_mutation.set_headers.add(
@@ -82,6 +99,7 @@ def serve():
     server.add_insecure_port('[::]:50051')
     server.start()
     logger.info("Ext-Proc gRPC Server berjalan di port 50051...")
+    
     server.wait_for_termination()
 
 if __name__ == '__main__':
