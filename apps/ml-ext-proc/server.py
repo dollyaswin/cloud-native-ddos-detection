@@ -47,22 +47,58 @@ class ExternalProcessorServicer(ext_proc_pb2_grpc.ExternalProcessorServicer):
             if request.HasField('request_headers'):
                 logger.info("Menerima Request Headers dari Envoy.")
                 
-                # --- LOGIKA INFERENSI ML (CONTOH) ---
-                # Mulai mencatat waktu (Start recording time)
+                # --- LOGIKA INFERENSI ML ---
                 start_time = time.time()
                 
-                # 1. Ekstrak data dari headers/body
-                # 2. Lakukan preprocessing ke format numpy array
-                # dummy_input = np.random.randn(1, 10).astype(np.float32) 
-                # 3. Jalankan inferensi ONNX
-                # ort_inputs = {self.ort_session.get_inputs()[0].name: dummy_input}
-                # ort_outs = self.ort_session.run(None, ort_inputs)
+                is_malicious = False
+                try:
+                    # 1. Ekstrak data dari headers
+                    # PENTING: Sesuaikan ekstraksi fitur ini dengan bagaimana model Anda dilatih!
+                    # Di sini kita mengekstrak beberapa fitur dummy untuk memenuhi dimensi (1, 10).
+                    headers = request.request_headers.headers.headers
+                    num_headers = len(headers)
+                    user_agent_len = 0
+                    path_len = 0
+                    is_post = 0.0
+                    
+                    for header in headers:
+                        if header.key == "user-agent":
+                            user_agent_len = len(header.value)
+                        elif header.key == ":path":
+                            path_len = len(header.value)
+                        elif header.key == ":method":
+                            is_post = 1.0 if header.value == "POST" else 0.0
+                            
+                    # 2. Preprocessing ke format numpy array
+                    # Anggap model mengharapkan input dengan shape (1, 10)
+                    features = [num_headers, user_agent_len, path_len, is_post, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                    input_data = np.array([features], dtype=np.float32)
+                    
+                    # 3. Jalankan inferensi ONNX
+                    if hasattr(self, 'ort_session'):
+                        input_name = self.ort_session.get_inputs()[0].name
+                        ort_outs = self.ort_session.run(None, {input_name: input_data})
+                        
+                        prediction = ort_outs[0][0] # Ambil nilai prediksi
+                        
+                        # Asumsi: Jika probabilitas > 0.5 atau klasifikasi = 1, maka itu DDoS
+                        if isinstance(prediction, (np.ndarray, list)):
+                            if len(prediction) > 1 and prediction[1] > 0.5:
+                                is_malicious = True
+                        else:
+                            if prediction > 0.5:
+                                is_malicious = True
+                                
+                        logger.info(f"Inferensi Selesai - Prediksi: {prediction} | Malicious: {is_malicious}")
+                    else:
+                        logger.warning("ONNX Session belum dimuat, tidak bisa melakukan klasifikasi.")
+                except Exception as e:
+                    logger.error(f"Gagal melakukan inferensi ML: {e}")
                 
                 # Hitung durasi (Calculate duration)
                 latency = time.time() - start_time
                 
                 # Log latensi dengan format JSON standar untuk ekstraksi data riset/paper
-                # (Log latency using standard JSON format for easy extraction in research papers)
                 experiment_data = {
                     "metric_type": "inference_latency",
                     "unit": "seconds",
@@ -71,13 +107,21 @@ class ExternalProcessorServicer(ext_proc_pb2_grpc.ExternalProcessorServicer):
                 }
                 logger.info(f"EXPERIMENT_DATA | {json.dumps(experiment_data)}")
                 
-                # Jika ML memutuskan trafik AMAN (CONTINUE)
-                response.request_headers.response.header_mutation.set_headers.add(
-                    header=base_pb2.HeaderValue(key="x-ml-verdict", value="clean")
-                )
-                
-                # Jika ML mendeteksi anomali, Anda bisa me-reject request di sini
-                # dengan merespon ext_proc_pb2.ImmediateResponse(status=403)
+                # 4. Berikan Rekomendasi ke Envoy
+                if is_malicious:
+                    # Jika ML mendeteksi anomali/DDoS, blokir dengan membalas HTTP 403 Forbidden
+                    logger.warning("DDoS Terdeteksi! Memerintahkan Envoy untuk menolak request (HTTP 403).")
+                    response.immediate_response.status.code = 403
+                    response.immediate_response.details = "Blocked by ML-Ext-Proc: DDoS Detected"
+                    response.immediate_response.headers.set_headers.add(
+                        header=base_pb2.HeaderValue(key="x-ml-verdict", value="blocked-ddos")
+                    )
+                else:
+                    # Jika ML memutuskan trafik AMAN (CONTINUE)
+                    logger.info("Trafik Aman. Membiarkan request diteruskan.")
+                    response.request_headers.response.header_mutation.set_headers.add(
+                        header=base_pb2.HeaderValue(key="x-ml-verdict", value="clean")
+                    )
                 
             elif request.HasField('request_body'):
                 logger.info("Menerima Request Body dari Envoy.")
