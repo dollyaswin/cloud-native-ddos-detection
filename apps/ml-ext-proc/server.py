@@ -61,17 +61,34 @@ class ExternalProcessorServicer(ext_proc_pb2_grpc.ExternalProcessorServicer):
                     path_len = 0
                     is_post = 0.0
                     
+                    # Dictionary untuk menyimpan header mentah demi keperluan log inline
+                    raw_headers_dict = {}
+                    
                     for header in headers:
+                        # Penting: Envoy versi terbaru sering menaruh isi header ke 'raw_value' (bytes) 
+                        # ketimbang 'value' (string) untuk menghindari isu encoding UTF-8.
+                        val = header.value
+                        if not val and header.raw_value:
+                            val = header.raw_value.decode('utf-8', 'ignore')
+                            
+                        raw_headers_dict[header.key] = val
+                        
                         if header.key == "user-agent":
-                            user_agent_len = len(header.value)
+                            user_agent_len = len(val)
                         elif header.key == ":path":
-                            path_len = len(header.value)
+                            path_len = len(val)
                         elif header.key == ":method":
-                            is_post = 1.0 if header.value == "POST" else 0.0
+                            is_post = 1.0 if val == "POST" else 0.0
                             
                     # 2. Preprocessing ke format numpy array
-                    # Anggap model mengharapkan input dengan shape (1, 10)
-                    features = [num_headers, user_agent_len, path_len, is_post, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                    # Model mengharapkan input dengan shape (1, 3) berdasarkan log error
+                    features = [num_headers, user_agent_len, path_len]
+                    
+                    # --- DEBUGGING LOGS (INLINE) ---
+                    # Menyatukan semua info menjadi satu baris log agar rapi saat stress test
+                    import json
+                    logger.info(f"DEBUG_REQ | ONNX_Input: {features} | Headers: {json.dumps(raw_headers_dict)}")
+                    
                     input_data = np.array([features], dtype=np.float32)
                     
                     # 3. Jalankan inferensi ONNX

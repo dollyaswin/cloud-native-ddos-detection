@@ -17,6 +17,8 @@ services:
     build:
       context: ./apps/ml-ext-proc
       dockerfile: Dockerfile
+    volumes:
+      - ./apps/ml-ext-proc/model.onnx:/app/model.onnx:ro
     # Mengikat jaringan container ini ke container 'fastapi' (simulasi localhost Pod)
     network_mode: "service:fastapi"
     depends_on:
