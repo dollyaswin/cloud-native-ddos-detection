@@ -12,15 +12,20 @@ services:
       - "8080:8080"
     restart: unless-stopped
 
-  # 2. ML Ext-Proc Service
+  # 2. ML Ext-Proc Service (berubah menjadi ML NIDS Sniffer)
   ml-ext-proc:
     build:
       context: ./apps/ml-ext-proc
       dockerfile: Dockerfile
     volumes:
       - ./apps/ml-ext-proc/model.onnx:/app/model.onnx:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     # Mengikat jaringan container ini ke container 'fastapi' (simulasi localhost Pod)
     network_mode: "service:fastapi"
+    # Membutuhkan hak akses (capabilities) untuk menyadap paket mentah dari interface jaringan
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     depends_on:
       - fastapi
     restart: unless-stopped

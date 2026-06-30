@@ -3,14 +3,14 @@ FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 
+# Install libpcap (dibutuhkan oleh cicflowmeter/scapy) dan iptables
+RUN apt-get update && apt-get install -y libpcap-dev tcpdump iproute2 iptables && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-# Membutuhkan grpcio, protobuf, onnxruntime
+# Membutuhkan grpcio, protobuf, onnxruntime, cicflowmeter
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py .
+COPY realtime_sniffer.py .
 COPY model.onnx .
 
-# Expose port 50051 untuk gRPC server
-EXPOSE 50051
-
-CMD ["python", "server.py"]
+CMD ["python", "realtime_sniffer.py"]
