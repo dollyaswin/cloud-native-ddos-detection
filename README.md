@@ -1,165 +1,131 @@
-# Real-time Distributed Denial-of-Service Detection on Cloud-Deployed API Gateway
+# Real-time Out-of-Band DDoS Detection on Cloud-Deployed API Gateway
+
+This application implements a highly scalable, out-of-band Network Intrusion Detection System (NIDS) designed to protect a FastAPI backend behind an Envoy API Gateway. Instead of intercepting traffic inline (which can cause severe latency bottlenecks during a DDoS attack), this architecture uses a Micro-Batching approach with a Machine Learning Stacking Ensemble to analyze traffic passively in real-time.
 
 ## Architecture Flow
 
-This application uses Envoy Proxy as the API Gateway, supported by a Machine Learning External Processing (ext-proc) filter for real-time anomaly and DDoS detection. Safe traffic is then forwarded to the FastAPI backend.
+The system captures raw network packets directly from the Docker container's network interface using `tcpdump`. Traffic is sliced into 5-second PCAP files and processed by CICFlowMeter to extract 23 statistical features. These features are then evaluated by a sophisticated Stacking Meta-Model.
 
 ```text
-       +---------------------------------------------------+
-       |                  Kubernetes Pod                   |
-       |  (Simulated via docker-compose network_mode)      |
-       |                                                   |
-[User] |    +-------+ (gRPC / Port 50051) +-------------+  |
-  |    |    |       |<===================>|             |  |
-  +=======> | Envoy |                       | ML Ext-Proc |  |
-(Port 8080) | Proxy |<------------------- | (ONNX)      |  |
-       |    |       |     (Safe Traffic)  +-------------+  |
-       |    +-------+                                      |
-       |        | (HTTP / Port 8000)                       |
-       |        v                                          |
-       |  +-----------+                                    |
-       |  |  FastAPI  |                                    |
-       |  +-----------+                                    |
-       +---------------------------------------------------+
+       +-------------------------------------------------------------+
+       |                     Kubernetes Pod                          |
+       |       (Simulated via docker compose network_mode)           |
+       |                                                             |
+[User] |    +-------+ (HTTP / Port 8000) +-------------+             |
+  |    |    |       |===================>|             |             |
+  +=======> | Envoy |                    |   FastAPI   |             |
+(Port 8080) | Proxy |<===================|             |             |
+       |    +-------+                    +-------------+             |
+       |        |                               |                    |
+       |        |       [Out-of-Band Sniffing]  |                    |
+       |        +...............................+                    |
+       |                        |                                    |
+       |                        v                                    |
+       |              +-------------------+                          |
+       |              |   ML NIDS Sniffer |                          |
+       |              |   (tcpdump -G 5)  |                          |
+       |              +-------------------+                          |
+       |                        | PCAP                               |
+       |                        v                                    |
+       |                 CICFlowMeter (CSV)                          |
+       |                        | 23 Features                        |
+       |                        v                                    |
+       |             [ ML Stacking Ensemble ]                        |
+       |            (XGBoost + LightGBM + CatBoost)                  |
+       |                        | 3 Probabilities                    |
+       |                        v                                    |
+       |                Meta-Model (ONNX)                            |
+       |                        |                                    |
+       |                        v                                    |
+       |               [DDoS ALERT] / [AMAN]                         |
+       +-------------------------------------------------------------+
 ```
 
-### Port Configuration in Docker Compose
-In a Kubernetes environment, these three containers run in a single Pod and share the same network namespace (`localhost`). 
+### Out-of-Band Micro-Batching
+Instead of evaluating packets one by one online (which is prone to CPU hanging and buffer overflows), the NIDS uses `tcpdump` to record traffic and forcefully flushes the flows every 5 seconds. This guarantees that incomplete flows (such as those in a SYN Flood) are extracted immediately and accurately without waiting for standard TCP timeouts.
 
-To simulate this locally, Docker Compose configures Envoy and the ML filter to use `network_mode: "service:fastapi"`. Because they share the FastAPI container's network interface, the host port mapping (exposing Envoy's port `8080`) must be defined under the `fastapi` service in `docker-compose.yaml`.
-
-The internal ports 8000 (FastAPI) and 50051 (ML) are not exposed to the host. This ensures that external requests cannot bypass Envoy to reach the backend directly.
-
-### Protocol Buffers and gRPC
-- **Protocol Buffers (Protobuf)**: Used as the data contract between Envoy Proxy and the ML Ext-Proc service. The `xds-protos` Python package provides pre-compiled Envoy protobuf definitions.
-- **gRPC**: A high-performance protocol used for communication between Envoy and the ML service. It supports bi-directional streaming, allowing Envoy to stream HTTP headers and bodies to the ML filter asynchronously with minimal latency.
-
-### Machine Learning Model
-By default, the application uses a pre-trained ONNX model (`model.onnx`) for DDoS detection. This model is based on XGBoost and can be found on Hugging Face:
-- **Model Card**: [DDoS Detection using XGBoost (ONNX)](https://huggingface.co/darkknight25/ddos_xgboost_onnx)
+### Machine Learning Stacking Pipeline
+The NIDS uses a two-stage Stacking Ensemble to achieve maximum accuracy:
+1. **Base Models**: XGBoost, LightGBM, and CatBoost evaluate the 23 statistical features extracted from the network flow and output a probability score (0 to 1).
+2. **Meta-Model**: An ONNX Meta-Model takes the 3 probabilities from the base models and makes the final classification (Normal vs. DDoS).
 
 ---
 
-## 1. Build the Application
-To build the container images for FastAPI and the ML service, run the following command in the project root directory:
+## 1. Prerequisites
+
+Before running the application, you must place the 4 required ONNX models into the `models/` directory:
+
 ```bash
-docker-compose build
+apps/ml-ext-proc/models/
+├── model.onnx  # Meta-Model (Takes 3 probabilities)
+├── xgb.onnx    # XGBoost Base Model (Takes 23 features)
+├── lgb.onnx    # LightGBM Base Model (Takes 23 features)
+└── cat.onnx    # CatBoost Base Model (Takes 23 features)
 ```
 
 ## 2. Run the Application
-Start all services in detached mode:
+
+Build and start all services in detached mode using Docker Compose:
 ```bash
-docker-compose up -d
-```
-To monitor the application logs in real-time:
-```bash
-docker-compose logs -f
+docker compose up --build -d
 ```
 
-## 3. Test the Application
-The application is accessible via Envoy Proxy on port 8080. Open a new terminal and run the verbose `curl` commands to see how the traffic is routed. Notice the `server: envoy` response header, which confirms the traffic is being handled by the proxy before reaching FastAPI.
-
-### 1. Test Root Endpoint
+Monitor the application logs in real-time to see the NIDS in action:
 ```bash
-curl -v http://localhost:8080/
-```
-**Expected Output:**
-```text
-* Host localhost:8080 was resolved.
-* IPv6: ::1
-* IPv4: 127.0.0.1
-*   Trying [::1]:8080...
-* Connected to localhost (::1) port 8080
-> GET / HTTP/1.1
-> Host: localhost:8080
-> User-Agent: curl/8.7.1
-> Accept: */*
->
-* Request completely sent off
-< HTTP/1.1 200 OK
-< date: Thu, 11 Jun 2026 06:36:37 GMT
-< server: envoy
-< content-length: 111
-< content-type: application/json
-< x-envoy-upstream-service-time: 9
-<
-* Connection #0 to host localhost left intact
-{"status":"success","message":"Hello World from FastAPI!","architecture":"Traffic routed via Envoy & Ext-Proc"}
+docker compose logs -f ml-ext-proc
 ```
 
-### 2. Test Healthcheck Endpoint
-```bash
-curl -v http://localhost:8080/health
-```
-**Expected Output:**
-```text
-* Host localhost:8080 was resolved.
-* IPv6: ::1
-* IPv4: 127.0.0.1
-*   Trying [::1]:8080...
-* Connected to localhost (::1) port 8080
-> GET /health HTTP/1.1
-> Host: localhost:8080
-> User-Agent: curl/8.7.1
-> Accept: */*
->
-* Request completely sent off
-< HTTP/1.1 200 OK
-< date: Thu, 11 Jun 2026 06:37:02 GMT
-< server: envoy
-< content-length: 20
-< content-type: application/json
-< x-envoy-upstream-service-time: 12
-<
-* Connection #0 to host localhost left intact
-{"status":"healthy"}
-```
+## 3. Test the Detection
+
+To verify the Stacking model's detection capabilities and measure the latency impact, two test scripts are provided in the repository: `run_client.sh` (simulating normal HTTP traffic) and `run_attack.sh` (simulating a DDoS SYN Flood).
+
+1. Ensure the NIDS is running and waiting for traffic:
+   ```text
+   [TCPDUMP STARTED] tcpdump: listening on eth0, link-type EN10MB...
+   Micro-Batch Processor started. Menunggu traffic...
+   ```
+2. Start the normal traffic load test on your client VM:
+   ```bash
+   ./run_client.sh
+   ```
+3. Simultaneously, launch the DDoS attack on your attacker VM:
+   ```bash
+   sudo ./run_attack.sh
+   ```
+4. Check the `ml-ext-proc` logs. Every 5 seconds, the system will output the evaluation results along with the inference latencies and probabilities:
+   ```text
+   [DDoS ALERT] Flow dari 10.148.0.2 ke 10.148.0.5 terdeteksi sebagai ANOMALI/DDoS! (Prob: XGB=0.99 LGB=0.98 CAT=0.99) (Latensi: 1.15ms)
+   ```
 
 ## 4. Experiment & Metric Extraction (For Scientific Papers)
 
-For research and benchmarking purposes, this application is configured to output high-precision inference latency metrics in structured JSON format via application logs. Meanwhile, container-level resource metrics (CPU/Memory) must be collected externally.
+For research and benchmarking purposes, this application automatically measures high-precision inference latencies (Avg, P50, P95, P99) and container-level resource utilization (CPU & Memory for Envoy, FastAPI, and ML). 
 
-### 4.1. Collecting CPU and Memory Metrics
-To ensure the Python application does not suffer from measurement overhead, track the resource usage of the container externally using `docker stats`.
+These metrics are aggregated and printed every 10 seconds in a structured JSON format to standard output.
 
-Run the following bash script in a new terminal *while your load test is running*:
+### Extracting the Metrics
+Once your experiment finishes, you can filter the logs to extract only the JSON metric reports:
 
 ```bash
-# Record CPU and RAM usage of the ml-ext-proc container every 1 second into a CSV file
-echo "timestamp,container,cpu_percent,mem_usage" > docker_metrics.csv
-while true; do
-  timestamp=$(date +%s)
-  stats=$(docker stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}}" | grep ml-ext-proc)
-  echo "$timestamp,$stats" >> docker_metrics.csv
-  sleep 1
-done
+docker compose logs ml-ext-proc | grep "EXPERIMENT_METRICS" > metrics.log
 ```
 
-### 4.2. Extracting Inference Latency
-The `ml-ext-proc` application prints a JSON log for every request it processes. Once your experiment finishes, you can extract these logs into a `.txt` file and convert them into a CSV for data analysis (e.g., using Python/Pandas, R, or Excel).
-
-1. **Export the logs to a file:**
-```bash
-docker-compose logs ml-ext-proc > experiment_logs.txt
-```
-
-2. **Convert the logs to CSV:**
-You can use the following Python script to parse the `experiment_logs.txt` file and generate a `latency_results.csv`:
-
-```python
-import json
-import csv
-
-with open('experiment_logs.txt', 'r') as log_file, open('latency_results.csv', 'w', newline='') as csv_file:
-    writer = csv.writer(csv_file)
-    writer.writerow(['timestamp', 'metric_type', 'latency_seconds']) # CSV Header
-    
-    for line in log_file:
-        if 'EXPERIMENT_DATA |' in line:
-            json_str = line.split('EXPERIMENT_DATA | ')[1].strip()
-            data = json.loads(json_str)
-            writer.writerow([data['timestamp'], data['metric_type'], data['value']])
-
-print("Data successfully extracted to latency_results.csv!")
+**Sample Log Output:**
+```json
+{
+  "metric_type": "nids_performance",
+  "total_flows_processed": 1450,
+  "latency_ms": {
+    "avg": 1.2,
+    "p50": 1.1,
+    "p95": 2.4,
+    "p99": 3.1
+  },
+  "container_resources": {
+    "app-ml-ext-proc-1": {"cpu_percent": 25.6, "memory_mb": 166.0},
+    "app-envoy-1": {"cpu_percent": 10.3, "memory_mb": 29.3},
+    "app-fastapi-1": {"cpu_percent": 15.2, "memory_mb": 38.1}
+  }
+}
 ```
 This structured logging approach is highly recommended for scientific paper publications, ensuring reproducible and easily parsable benchmark datasets.
