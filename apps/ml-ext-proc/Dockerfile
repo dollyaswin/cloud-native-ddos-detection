@@ -11,6 +11,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY realtime_sniffer.py .
-COPY model.onnx .
+
 
 CMD ["python", "realtime_sniffer.py"]

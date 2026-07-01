@@ -17,16 +17,48 @@ logger = logging.getLogger("RealTime-NIDS")
 class MicroBatchNIDS:
     def __init__(self):
         self.interface = "eth0"
-        self.model_path = "model.onnx"
-        self.session = None
-        self.input_name = None
+        self.pcap_dir = "/app/pcap_data"
+        os.makedirs(self.pcap_dir, exist_ok=True)
+        
+        self.meta_model_path = "/app/models/model.onnx"
+        self.xgb_path = "/app/models/xgb.onnx"
+        self.lgb_path = "/app/models/lgb.onnx"
+        self.cat_path = "/app/models/cat.onnx"
+        
+        self.session_meta = None
+        self.session_xgb = None
+        self.session_lgb = None
+        self.session_cat = None
         
         try:
-            self.session = ort.InferenceSession(self.model_path)
-            self.input_name = self.session.get_inputs()[0].name
-            logger.info("ONNX Model loaded successfully.")
+            self.session_meta = ort.InferenceSession(self.meta_model_path)
+            self.meta_input = self.session_meta.get_inputs()[0].name
+            logger.info("Meta ONNX Model loaded successfully.")
+            
+            # Load base models if they exist and are not empty
+            if os.path.exists(self.xgb_path) and os.path.getsize(self.xgb_path) > 0:
+                self.session_xgb = ort.InferenceSession(self.xgb_path)
+                self.xgb_input = self.session_xgb.get_inputs()[0].name
+                logger.info("XGBoost Model loaded.")
+            else:
+                logger.warning(f"Model {self.xgb_path} belum valid/kosong. Siapkan file ini agar Stacking bisa berjalan maksimal.")
+                
+            if os.path.exists(self.lgb_path) and os.path.getsize(self.lgb_path) > 0:
+                self.session_lgb = ort.InferenceSession(self.lgb_path)
+                self.lgb_input = self.session_lgb.get_inputs()[0].name
+                logger.info("LightGBM Model loaded.")
+            else:
+                logger.warning(f"Model {self.lgb_path} belum valid/kosong. Siapkan file ini agar Stacking bisa berjalan maksimal.")
+                
+            if os.path.exists(self.cat_path) and os.path.getsize(self.cat_path) > 0:
+                self.session_cat = ort.InferenceSession(self.cat_path)
+                self.cat_input = self.session_cat.get_inputs()[0].name
+                logger.info("CatBoost Model loaded.")
+            else:
+                logger.warning(f"Model {self.cat_path} belum valid/kosong. Siapkan file ini agar Stacking bisa berjalan maksimal.")
+                
         except Exception as e:
-            logger.error(f"Failed to load ONNX model: {e}")
+            logger.error(f"Failed to load ONNX models: {e}")
             sys.exit(1)
             
         self.latencies = []
@@ -169,7 +201,29 @@ class MicroBatchNIDS:
                 input_data = np.array([features_list], dtype=np.float32)
                 
                 start_time = time.time()
-                ort_outs = self.session.run(None, {self.input_name: input_data})
+                
+                # 1. Dapatkan Probabilitas dari Base Models (jika modelnya ada)
+                prob_xgb = 0.0
+                prob_lgb = 0.0
+                prob_cat = 0.0
+                
+                if self.session_xgb:
+                    out_xgb = self.session_xgb.run(None, {self.xgb_input: input_data})
+                    # Ambil probabilitas kelas positif (1)
+                    prob_xgb = float(out_xgb[1][0][1]) if len(out_xgb) > 1 else float(out_xgb[0][0])
+                    
+                if self.session_lgb:
+                    out_lgb = self.session_lgb.run(None, {self.lgb_input: input_data})
+                    prob_lgb = float(out_lgb[1][0][1]) if len(out_lgb) > 1 else float(out_lgb[0][0])
+                    
+                if self.session_cat:
+                    out_cat = self.session_cat.run(None, {self.cat_input: input_data})
+                    prob_cat = float(out_cat[1][0][1]) if len(out_cat) > 1 else float(out_cat[0][0])
+                    
+                # 2. Feed Probabilities ke Meta-Model (Stacking)
+                meta_input_data = np.array([[prob_xgb, prob_lgb, prob_cat]], dtype=np.float32)
+                ort_outs = self.session_meta.run(None, {self.meta_input: meta_input_data})
+                
                 latency = time.time() - start_time
                 
                 self.latencies.append(latency)
@@ -185,9 +239,9 @@ class MicroBatchNIDS:
                         is_malicious = True
                         
                 if is_malicious:
-                    logger.warning(f"[DDoS ALERT] Flow dari {src_ip} ke {dst_ip} terdeteksi sebagai ANOMALI/DDoS! (Latensi: {latency*1000:.2f}ms)")
+                    logger.warning(f"[DDoS ALERT] Flow dari {src_ip} ke {dst_ip} terdeteksi sebagai ANOMALI/DDoS! (Prob: XGB={prob_xgb:.2f} LGB={prob_lgb:.2f} CAT={prob_cat:.2f}) (Latensi: {latency*1000:.2f}ms)")
                 else:
-                    logger.info(f"[AMAN] Flow dari {src_ip} ke {dst_ip} terpantau normal. (Latensi: {latency*1000:.2f}ms)")
+                    logger.info(f"[AMAN] Flow dari {src_ip} ke {dst_ip} terpantau normal. (Prob: XGB={prob_xgb:.2f} LGB={prob_lgb:.2f} CAT={prob_cat:.2f}) (Latensi: {latency*1000:.2f}ms)")
                     
         except pd.errors.EmptyDataError:
             # Tidak ada paket valid di pcap ini, abaikan
